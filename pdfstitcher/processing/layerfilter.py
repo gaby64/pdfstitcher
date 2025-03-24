@@ -87,6 +87,9 @@ class LayerFilter(ProcessingBase):
         """
         Updates the OCProperties dictionary to only include the layers we want.
         """
+        if "/OCProperties" not in self.out_doc.Root:
+            print("No layers found in the PDF, skipping layer processing.")
+            return
         # If the list was 'all', modify so it includes all the layers
         if self.p["keep_ocs"] == "all":
             self.p["keep_ocs"] = utils.get_layer_names(self.in_doc)

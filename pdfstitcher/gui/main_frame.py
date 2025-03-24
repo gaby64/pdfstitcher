@@ -122,36 +122,12 @@ class PDFStitcherFrame(wx.Frame):
         """
         Helper function to pack up the tiling options
         """
-        # define trim options
-        trim = [0.0] * 4
-        trim[0] = utils.txt_to_float(self.tt.left_trim_txt.GetValue())
-        trim[1] = utils.txt_to_float(self.tt.right_trim_txt.GetValue())
-        trim[2] = utils.txt_to_float(self.tt.top_trim_txt.GetValue())
-        trim[3] = utils.txt_to_float(self.tt.bottom_trim_txt.GetValue())
+        # Use TileTab's get_options method to collect all options
+        tile_opts = self.tt.get_options()
+        if tile_opts is None:
+            return None  # Return None if there was an error (e.g., invalid output size)
 
-        # rows/cols
-        cols = self.tt.columns_txt.GetValue().strip()
-        cols = int(cols) if cols else None
-        rows = self.tt.rows_txt.GetValue().strip()
-        rows = int(rows) if rows else None
-
-        return {
-            # The bare minimum rows/columns (only one should be defined)
-            "rows": rows,
-            "cols": cols,
-            # set all the various options of the tiler
-            "col_major": bool(self.tt.col_row_order_combo.GetSelection()),
-            "right_to_left": bool(self.tt.left_right_combo.GetSelection()),
-            "bottom_to_top": bool(self.tt.top_bottom_combo.GetSelection()),
-            # set the optional stuff
-            "rotation": self.tt.rotate_combo.GetSelection(),
-            # margins, margins!
-            "margin": utils.txt_to_float(self.tt.margin_txt.GetValue()),
-            # trim related stuff
-            "trim": trim,
-            "actually_trim": bool(self.tt.trim_overlap_combo.GetSelection()),
-            "override_trim": bool(self.tt.override_trim.GetValue()),
-        }
+        return tile_opts
 
     def get_layer_opts(self):
         """

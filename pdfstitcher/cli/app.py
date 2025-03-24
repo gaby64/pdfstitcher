@@ -8,7 +8,7 @@
 import argparse
 from pdfstitcher import utils
 from pdfstitcher.processing.mainproc import MainProcess
-from pdfstitcher.utils import Config
+from pdfstitcher.utils import Config, parse_size
 
 
 def add_tile_args(parser: argparse.ArgumentParser) -> None:
@@ -103,6 +103,18 @@ def add_tile_args(parser: argparse.ArgumentParser) -> None:
         + " "
         + _("Caution: results in scaling of pages"),
         default=None,
+    )
+    t_parser.add_argument(
+        "--output-size",
+        type=str,
+        help=_("Output page size without scaling, e.g., '8.5x11 in'"),
+        default=None,
+    )
+    t_parser.add_argument(
+        "--scale",
+        type=float,
+        default=1.0,
+        help=_("Scale pages before tiling (e.g., 0.85 for 85% scaling, default: 1.0)"),
     )
     t_parser.add_argument(
         "--trimbox-to-mediabox",
@@ -261,7 +273,18 @@ def main():
         "actually_trim": args.actually_trim,
         "target_height": args.target_height,
         "target_width": args.target_width,
+        "scale": args.scale,  # Add scale parameter
     }
+
+    # Add output size if specified
+    if args.output_size:
+        try:
+            w, h = parse_size(args.output_size)
+            tile_params["output_width"] = w
+            tile_params["output_height"] = h
+        except ValueError as e:
+            print(f"Error: {e}")
+            return
 
     # Set the layer filter parameters
     layer_params = {

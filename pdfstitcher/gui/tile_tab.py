@@ -10,7 +10,7 @@
 import wx
 import wx.lib.scrolledpanel as scrolled
 from pdfstitcher import utils
-from pdfstitcher.utils import Config
+from pdfstitcher.utils import Config, parse_size
 
 
 class TileTab(scrolled.ScrolledPanel):
@@ -303,6 +303,52 @@ class TileTab(scrolled.ScrolledPanel):
             newline, flag=wx.TOP | wx.LEFT | wx.RIGHT, border=self.FromDIP(utils.BORDER * 2)
         )
 
+        # Output size
+        newline = wx.BoxSizer(wx.HORIZONTAL)
+        newline.Add(
+            wx.StaticText(self, label=_("Output Page Size (e.g., 8.5x11 in)") + ":"),
+            flag=wx.ALIGN_CENTRE_VERTICAL,
+        )
+        self.output_size_txt = wx.TextCtrl(self)
+        self.output_size_txt.SetToolTip(
+            wx.ToolTip(_("Specify the output page size to split the tiled layout into multiple pages"))
+        )
+        newline.Add(
+            self.output_size_txt,
+            proportion=1,
+            flag=wx.ALIGN_CENTRE_VERTICAL | wx.LEFT,
+            border=self.FromDIP(utils.BORDER),
+        )
+        vert_sizer.Add(
+            newline,
+            flag=wx.EXPAND | wx.TOP | wx.LEFT | wx.RIGHT,
+            border=self.FromDIP(utils.BORDER * 2),
+        )
+
+        # Scale
+        newline = wx.BoxSizer(wx.HORIZONTAL)
+        newline.Add(
+            wx.StaticText(self, label=_("Scale Pages Before Tiling (e.g., 0.85 for 85%)") + ":"),
+            flag=wx.ALIGN_CENTRE_VERTICAL,
+        )
+        self.scale_txt = wx.TextCtrl(
+            self, size=self.FromDIP(utils.NUM_ENTRY_SIZE), style=wx.TE_RIGHT
+        )
+        self.scale_txt.SetValue("1.0")  # Default to 100% (no scaling)
+        self.scale_txt.SetToolTip(
+            wx.ToolTip(_("Scale pages before tiling (e.g., 0.85 for 85% scaling)"))
+        )
+        newline.Add(
+            self.scale_txt,
+            flag=wx.ALIGN_CENTRE_VERTICAL | wx.LEFT,
+            border=self.FromDIP(utils.BORDER),
+        )
+        vert_sizer.Add(
+            newline,
+            flag=wx.TOP | wx.LEFT | wx.RIGHT,
+            border=self.FromDIP(utils.BORDER * 2),
+        )
+
         self.SetSizer(vert_sizer)
         self.SetupScrolling()
         self.SetBackgroundColour(parent.GetBackgroundColour())
@@ -313,3 +359,38 @@ class TileTab(scrolled.ScrolledPanel):
             self.rows_txt.ChangeValue("")
         if event.GetId() == self.rows_txt.GetId():
             self.columns_txt.ChangeValue("")
+
+    def get_options(self):
+        """
+        Return the options dictionary for the PageTiler.
+        """
+        options = {
+            "cols": utils.txt_to_int(self.columns_txt.GetValue()),
+            "rows": utils.txt_to_int(self.rows_txt.GetValue()),
+            "col_major": self.col_row_order_combo.GetSelection() == 1,
+            "right_to_left": self.left_right_combo.GetSelection() == 1,
+            "bottom_to_top": self.top_bottom_combo.GetSelection() == 1,
+            "rotation": self.rotate_combo.GetSelection(),
+            "margin": utils.txt_to_float(self.margin_txt.GetValue()),
+            "trim": [
+                utils.txt_to_float(self.left_trim_txt.GetValue()),
+                utils.txt_to_float(self.right_trim_txt.GetValue()),
+                utils.txt_to_float(self.top_trim_txt.GetValue()),
+                utils.txt_to_float(self.bottom_trim_txt.GetValue()),
+            ],
+            "override_trim": self.override_trim.GetValue(),
+            "actually_trim": self.trim_overlap_combo.GetSelection() == 1,
+            "scale": utils.txt_to_float(self.scale_txt.GetValue()),  # Add scale option
+        }
+
+        # Add output size if specified
+        if self.output_size_txt.GetValue():
+            try:
+                w, h = parse_size(self.output_size_txt.GetValue())
+                options["output_width"] = w
+                options["output_height"] = h
+            except ValueError as e:
+                wx.MessageBox(f"Invalid output size: {e}", "Error")
+                return None
+
+        return options

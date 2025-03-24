@@ -13,6 +13,7 @@ from enum import IntEnum
 
 from appdirs import user_config_dir
 import yaml
+import re
 
 # localization stuff
 import gettext
@@ -435,3 +436,13 @@ def write_page(fname: str, page: pikepdf.Page) -> None:
     with open(fname, "w") as f:
         commands = pikepdf.parse_content_stream(page)
         f.write(pikepdf.unparse_content_stream(commands).decode("pdfdoc"))
+
+# Added function
+def parse_size(size_str):
+    """Parse size string like '8.5x11 in' into points."""
+    match = re.match(r"(\d*\.?\d+)x(\d*\.?\d+)\s*(in|cm|mm|pt)", size_str.lower())
+    if not match:
+        raise ValueError("Invalid size format. Use 'WxH unit' (e.g., '8.5x11 in')")
+    w, h, unit = float(match.group(1)), float(match.group(2)), match.group(3)
+    units = {'in': 72, 'cm': 28.35, 'mm': 2.835, 'pt': 1}
+    return w * units[unit], h * units[unit]

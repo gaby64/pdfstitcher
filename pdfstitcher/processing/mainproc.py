@@ -76,7 +76,15 @@ class MainProcess(ProcessingBase):
             print("Unknown processing unit: {}".format(name))
             return False
 
+        # Validate parameters for PageTiler
+        if name == "PageTiler":
+            if "output_width" in params and "output_height" in params:
+                if not (params["output_width"] > 0 and params["output_height"] > 0):
+                    print("Error: Output width and height must be positive values")
+                    return False
+
         self.pipeline[name].params = params
+        return True
 
     def run(self, progress_win=None) -> bool:
         """

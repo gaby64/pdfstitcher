@@ -105,6 +105,7 @@ class PageTiler(ProcessingBase):
         print("    " + _("Trim") + ": {} {}".format(self.p["trim"], Config.general["units"]))
         print("    " + _("Rotation") + ": {}".format(str(self.p["rotation"])))
         print("    " + _("Page order") + ": {}, {}, {}".format(orderstr, lrstr, btstr))
+        print("    " + _("Scale") + ": {}".format(self.p.get("scale", 1.0)))
 
         # alignment options only set outside of PDFStitcher GUI
         if "vertical_align" in self.p:
@@ -143,12 +144,15 @@ class PageTiler(ProcessingBase):
         if self.p["override_trim"]:
             bbox = copy.copy(in_doc_page.MediaBox)
         else:
-            bbox = copy.copy(in_doc_page.trimbox)
+            bbox = copy.copy(in_doc_page.get("/TrimBox", in_doc_page.MediaBox))
+
+        print(f"Page {p}: Initial BBox = {bbox}")
 
         if self.p["actually_trim"]:
             # set the trim box to cut off content if requested
             # trim needs to be rotated as it's defined in the rotated space, but the bbox is not
             page_trim = self._get_page_trim(page_uu, page_rot)
+            print(f"Page {p}: Trim (left, bottom, right, top) = {page_trim}")
             bbox = [
                 float(bbox[0]) + page_trim[0],
                 float(bbox[1]) + page_trim[1],
@@ -156,6 +160,7 @@ class PageTiler(ProcessingBase):
                 float(bbox[3]) - page_trim[3],
             ]
         content_dict[pagekey].BBox = bbox
+        print(f"Page {p}: Trimmed BBox = {bbox}")
 
         # define the matrix in case it doesn't exist (assumed identity)
         matrix = (
@@ -188,6 +193,13 @@ class PageTiler(ProcessingBase):
         if not self.p["actually_trim"]:
             p_width -= page_trim[0] + page_trim[2]
             p_height -= page_trim[1] + page_trim[3]
+            
+        print(f"Page {p}: Pre-scaled dimensions (width, height) = ({p_width}, {p_height})")
+
+        # Apply user-defined scale
+        scale = self.p.get("scale", 1.0)
+        p_width *= scale
+        p_height *= scale
 
         # append the page info
         info.append({"width": p_width, "height": p_height, "pagekey": pagekey})
@@ -412,12 +424,12 @@ class PageTiler(ProcessingBase):
         if "horizontal_align" in self.p:
             h_align = self.p["horizontal_align"]
         else:
-            h_align = SW_ALIGN_H.MID
+            h_align = SW_ALIGN_H.LEFT
 
         if "vertical_align" in self.p:
             v_align = self.p["vertical_align"]
         else:
-            v_align = SW_ALIGN_V.MID
+            v_align = SW_ALIGN_V.TOP
 
         shift_right = 0
         shift_up = 0
@@ -428,8 +440,8 @@ class PageTiler(ProcessingBase):
 
         if v_align is SW_ALIGN_V.MID:
             shift_up = round(vertical_space / 2)
-        elif v_align is SW_ALIGN_V.TOP:
-            shift_up = round(vertical_space)
+        elif v_align is SW_ALIGN_V.BOTTOM:
+            shift_up = -round(vertical_space)
 
         # invert shift if we are rotating
         if "rotation" in self.p:
@@ -454,29 +466,44 @@ class PageTiler(ProcessingBase):
                 self.output_uu = float(page.UserUnit)
 
     def _compute_T_matrix(
-        self, i: int, col_width: list, row_height: list, page_info: dict, scale: float = 1
+        self, i: int, col_width: list, row_height: list, page_info: dict, scale: float = 1, y_top: float = 0, page_r: int = None
     ) -> list:
         """
         Calculates the transformation matrix for page i (zero indexed).
         Returns a list of 6 elements representing the matrix.
         """
+        user_scale = self.p.get("scale", 1.0)
+        effective_scale = scale * user_scale
 
         if self.p["rotation"] in (SW_ROTATION.CLOCKWISE, SW_ROTATION.COUNTERCLOCKWISE):
             # swap width and height of pages if rotated
             page_info["width"], page_info["height"] = page_info["height"], page_info["width"]
 
-        r, c = self._grid_position(i)
+        # Use page_r if provided, otherwise fall back to _grid_position
+        if page_r is not None:
+            r = page_r
+            c = 0  # Since cols=1, c is always 0
+        else:
+            r, c = self._grid_position(i)
 
         # the origin is the sum of all the sizes before the current one
+        number_of_labels = len(row_height)
+        output_width = self.p.get("output_width", col_width[c])
+        output_height = self.p.get("output_height", row_height[r])
+        trim_bottom = Config.general["units"].units_to_pts(self.p["trim"][3], 1)
+
         x0 = sum(col_width[:c])
-        y0 = sum(row_height[r + 1 :])
+        y0 = output_height - (number_of_labels - r) * page_info["height"]
 
         # the XObject may be smaller than the grid space, so calculate the shift needed
-        horizontal_space = col_width[c] - page_info["width"] * scale
-        vertical_space = row_height[r] - page_info["height"] * scale
+        horizontal_space = output_width - page_info["width"]
+        vertical_space = row_height[r] - page_info["height"]
 
         # apply shift
         shift_right, shift_up = self._calc_shift(horizontal_space, vertical_space)
+
+        print(f"trim_bottom: {trim_bottom}, user_scale: {user_scale}, number_of_labels: {number_of_labels}, output_height: {output_height}")
+
         x0 += shift_right
         y0 += shift_up
 
@@ -497,7 +524,7 @@ class PageTiler(ProcessingBase):
                 y0 += page_info["height"]
 
         # not quite matrix multiplication but works for a scalar scale factor
-        R = [R[i] * scale for i in range(len(R))]
+        R = [R[i] * effective_scale for i in range(len(R))]
 
         return R + [x0, y0]
 
@@ -571,6 +598,87 @@ class PageTiler(ProcessingBase):
 
         return content_txt, (width, height)
 
+    def _layout_multi_page(self, info: list, content_dict: pikepdf.Dictionary) -> None:
+        if not (self.p.get("output_width") and self.p.get("output_height")):
+            raise ValueError("Output width and height must be specified for multi-page tiling")
+
+        if not info:
+            print("No pages to tile after processing. Please check the input PDFs and page range.")
+            return
+
+        # Calculate how many tiles fit on one page based on output height
+        tile_height = info[0]["height"]  # Assuming all tiles have the same height
+        tiles_per_page = int(self.p["output_height"] // tile_height)  # e.g., 432 / 183.26 ≈ 2
+        total_tiles = len(info)
+        tiles_for_grid = min(len(info), self.rows * self.cols)
+        col_width, row_height = self._compute_target_size(info[:tiles_for_grid])
+        grid_width = sum(col_width)
+        grid_height = sum(row_height)
+
+        margin = Config.general["units"].units_to_pts(self.p["margin"], self.output_uu)
+        output_height = self.p["output_height"]
+
+        current_page_tiles = []
+        current_page_content = ""
+        current_page_idx = 0
+        tiles_on_current_page = 0
+
+        # Adjust row heights for the current page
+        page_row_height = [tile_height] * tiles_per_page
+
+        for i in range(total_tiles):
+            if info[i]["pagekey"] is None:
+                continue
+
+            # Check if we need to start a new page
+            if tiles_on_current_page >= tiles_per_page and current_page_tiles:
+                media_box = [
+                    -margin,
+                    -margin,
+                    self.p["output_width"] + margin,
+                    self.p["output_height"] + margin,
+                ]
+                tiled_page = pikepdf.Dictionary(
+                    Type=pikepdf.Name.Page,
+                    MediaBox=media_box,
+                    Resources=pikepdf.Dictionary(XObject=content_dict),
+                    Contents=pikepdf.Stream(self.out_doc, current_page_content.encode()),
+                    UserUnit=self.output_uu,
+                )
+                self.out_doc.pages.append(pikepdf.Page(tiled_page))
+                current_page_idx += 1
+
+                current_page_tiles = []
+                current_page_content = ""
+                tiles_on_current_page = 0
+
+            # Adjust the row index for the current page
+            page_r = tiles_on_current_page % tiles_per_page
+            # Compute T matrix using the page-specific row index
+            T = self._compute_T_matrix(i, col_width, page_row_height, info[i], y_top=output_height, page_r=page_r)
+            print(f"Page {i} (Output Page {current_page_idx}): T={T}, width={info[i]['width']}, height={info[i]['height']}")
+            current_page_content += "q " + " ".join([str(t) for t in T]) + " cm "
+            current_page_content += f"{info[i]['pagekey']} Do Q "
+            current_page_tiles.append(i)
+            tiles_on_current_page += 1
+
+        # Write the last page if there are remaining tiles
+        if current_page_tiles:
+            media_box = [
+                -margin,
+                -margin,
+                self.p["output_width"] + margin,
+                self.p["output_height"] + margin,
+            ]
+            tiled_page = pikepdf.Dictionary(
+                Type=pikepdf.Name.Page,
+                MediaBox=media_box,
+                Resources=pikepdf.Dictionary(XObject=content_dict),
+                Contents=pikepdf.Stream(self.out_doc, current_page_content.encode()),
+                UserUnit=self.output_uu,
+            )
+            self.out_doc.pages.append(pikepdf.Page(tiled_page))
+
     def _get_process_function(self) -> callable:
         """
         Returns the processing function to use based on the requested scaling mode.
@@ -595,6 +703,8 @@ class PageTiler(ProcessingBase):
                 )
             )
             return self._layout_scaled
+        elif "output_width" in self.p and "output_height" in self.p:
+            return self._layout_multi_page
         else:
             return self._layout_no_scaling
 
@@ -606,7 +716,7 @@ class PageTiler(ProcessingBase):
 
         if self.in_doc is None:
             print(_("Input document not loaded"))
-            return
+            return False
 
         process = self._get_process_function()
         if process is None:
@@ -630,31 +740,35 @@ class PageTiler(ProcessingBase):
 
         # after calculating rows/cols but before reordering trim, show the user the selected options
         self._show_options()
-        content_txt, dims = process(info)
 
-        # create a new document with a page big enough to contain all the tiled pages, plus requested margin
-        margin = Config.general["units"].units_to_pts(self.p["margin"], self.output_uu)
-        # Note: change in behaviour from v0.9xx to v1.0! The origin is now inside the margin.
-        media_box = [
-            -margin,
-            -margin,
-            dims[0] + margin,
-            dims[1] + margin,
-        ]
+        if process == self._layout_multi_page:
+            process(info, content_dict)
+        else:
+            content_txt, dims = process(info)
 
-        size_warning = utils.print_media_box(media_box, self.output_uu)
-        if size_warning:
-            self._warn(size_warning)
+            # create a new document with a page big enough to contain all the tiled pages, plus requested margin
+            margin = Config.general["units"].units_to_pts(self.p["margin"], self.output_uu)
+            # Note: change in behaviour from v0.9xx to v1.0! The origin is now inside the margin.
+            media_box = [
+                -margin,
+                -margin,
+                dims[0] + margin,
+                dims[1] + margin,
+            ]
 
-        # add the new page to the document
-        tiled_page = pikepdf.Dictionary(
-            Type=pikepdf.Name.Page,
-            MediaBox=media_box,
-            Resources=pikepdf.Dictionary(XObject=content_dict),
-            Contents=pikepdf.Stream(self.out_doc, content_txt.encode()),
-            UserUnit=self.output_uu,
-        )
-        self.out_doc.pages.append(pikepdf.Page(tiled_page))
+            size_warning = utils.print_media_box(media_box, self.output_uu)
+            if size_warning:
+                self._warn(size_warning)
+
+            # add the new page to the document
+            tiled_page = pikepdf.Dictionary(
+                Type=pikepdf.Name.Page,
+                MediaBox=media_box,
+                Resources=pikepdf.Dictionary(XObject=content_dict),
+                Contents=pikepdf.Stream(self.out_doc, content_txt.encode()),
+                UserUnit=self.output_uu,
+            )
+            self.out_doc.pages.append(pikepdf.Page(tiled_page))
         self.needs_run = False
 
         return True
